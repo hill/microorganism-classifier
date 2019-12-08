@@ -3,6 +3,8 @@
 ## Aim
 - given new image of some microorganism, classify and generate bounding box
 
+* https://www.youtube.com/watch?v=APwJdLOueM0
+
 ## Notes
 
 ### Datasets
