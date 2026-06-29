@@ -1,0 +1,125 @@
+@import "tailwindcss";
+
+/* Gruvbox dark tokens */
+@theme {
+  --color-paper: #282828;
+  --color-paper-2: #32302f;
+  --color-paper-3: #3c3836;
+  --color-rule: #3c3836;
+  --color-rule-2: #504945;
+  --color-ink: #ebdbb2;
+  --color-ink-2: #a89984;
+  --color-ink-3: #7c6f64;
+  --color-accent: #8ec07c;
+  --color-accent-2: #689d6a;
+  --color-accent-soft: #3c3836;
+  --color-record: #fb4934;
+  --color-record-2: #cc241d;
+  --color-danger: #fb4934;
+  --color-success: #b8bb26;
+
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-feature-settings: "ss01", "cv11";
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+input, textarea, select { user-select: text; color: var(--color-ink); }
+
+/* All interactive elements get the pointer cursor by default */
+button:not(:disabled),
+[role="button"]:not([aria-disabled="true"]),
+a[href],
+summary,
+select,
+label[for] {
+  cursor: pointer;
+}
+
+button:disabled,
+[aria-disabled="true"] {
+  cursor: not-allowed;
+}
+
+/* Tauri 2 drag region. The data attribute is just a convention,
+   the actual drag behaviour comes from this CSS rule. */
+*[data-tauri-drag-region] {
+  -webkit-app-region: drag;
+  app-region: drag;
+  cursor: default;
+}
+
+/* Interactive elements inside a drag region must opt out explicitly */
+*[data-tauri-drag-region] button,
+*[data-tauri-drag-region] input,
+*[data-tauri-drag-region] a,
+*[data-tauri-drag-region] textarea,
+*[data-tauri-drag-region] select,
+button[data-tauri-drag-region-disabled],
+.no-drag {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+  cursor: pointer;
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--color-rule-2);
+  border-radius: 999px;
+  border: 2px solid var(--color-paper);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--color-ink-3); }
+
+input:focus, textarea:focus, button:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--color-accent) 40%, transparent);
+  outline-offset: 1px;
+}
+
+.processing-preview {
+  background:
+    radial-gradient(circle at 72% 30%, rgb(184 187 38 / 24%) 0 7%, transparent 8%),
+    radial-gradient(circle at 30% 65%, rgb(142 192 124 / 18%) 0 10%, transparent 11%),
+    linear-gradient(145deg, #d5c4a1, #928374);
+}
+
+.processing-preview::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at center, transparent 28%, rgb(40 40 40 / 24%));
+}
+
+.processing-preview-cell {
+  position: absolute;
+  left: 25%;
+  top: 22%;
+  width: 31px;
+  height: 22px;
+  border: 2px solid rgb(60 56 54 / 76%);
+  border-radius: 48% 52% 44% 56%;
+  transform: rotate(-18deg);
+  box-shadow: inset 0 0 7px rgb(40 40 40 / 30%), 0 0 2px rgb(235 219 178 / 80%);
+}
+
+.processing-preview-cell-small {
+  left: 68%;
+  top: 62%;
+  width: 13px;
+  height: 9px;
+  border-width: 1px;
+  transform: rotate(24deg);
+}
