@@ -121,14 +121,19 @@ export interface Snapshot {
   notes: string | null;
 }
 
-export const useSnapshots = (filters: { run_id?: number; flagged?: boolean; label?: string } = {}) => {
+export const useSnapshots = (
+  filters: { run_id?: number; session_id?: number; flagged?: boolean; label?: string } = {},
+  options: { enabled?: boolean } = {},
+) => {
   const params = new URLSearchParams();
   if (filters.run_id !== undefined) params.set("run_id", String(filters.run_id));
+  if (filters.session_id !== undefined) params.set("session_id", String(filters.session_id));
   if (filters.flagged !== undefined) params.set("flagged", String(filters.flagged));
   if (filters.label) params.set("label", filters.label);
   return useQuery({
     queryKey: ["snapshots", filters],
     queryFn: () => jsonFetch<Snapshot[]>(`/snapshots?${params.toString()}`),
+    enabled: options.enabled ?? true,
   });
 };
 
@@ -204,6 +209,36 @@ export interface CameraInfo {
 
 export const useCameras = () =>
   useQuery({ queryKey: ["cameras"], queryFn: () => jsonFetch<CameraInfo[]>("/cameras") });
+
+export interface DetectionStatus {
+  enabled: boolean;
+}
+
+export const useDetectionStatus = () =>
+  useQuery({
+    queryKey: ["detection"],
+    queryFn: () => jsonFetch<DetectionStatus>("/detection"),
+  });
+
+export const useSetDetection = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (enabled: boolean) =>
+      jsonFetch<DetectionStatus>("/detection", {
+        method: "PATCH",
+        body: JSON.stringify({ enabled }),
+      }),
+    onSuccess: (status) => qc.setQueryData(["detection"], status),
+  });
+};
+
+export const useRescanCameras = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => jsonFetch<CameraInfo[]>("/cameras/rescan", { method: "POST" }),
+    onSuccess: (cameras) => qc.setQueryData(["cameras"], cameras),
+  });
+};
 
 export type SettingsPatch = Partial<Omit<Settings, "id">>;
 

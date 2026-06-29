@@ -35,6 +35,7 @@ interface AppState {
   startClip: (secondsBefore?: number) => Promise<void>;
   stopClip: () => Promise<void>;
   takeSnapshot: () => Promise<void>;
+  saveDetection: (trackId: number, label?: string) => Promise<void>;
 }
 
 const Ctx = createContext<AppState | null>(null);
@@ -141,6 +142,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
     },
   });
 
+  const saveDetection = useMutation({
+    mutationFn: async ({ trackId, label }: { trackId: number; label?: string }) => {
+      const smid = await ensureSample();
+      await jsonPost(`/detections/${trackId}/save`, {
+        sample_id: smid,
+        label: label || null,
+      });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tracks"] });
+    },
+  });
+
   const startNewSession = async () => {
     const s = await jsonPost<{ id: number }>("/sessions", {});
     setSessionId(s.id);
@@ -187,6 +201,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     },
     takeSnapshot: async () => {
       await snap.mutateAsync();
+    },
+    saveDetection: async (trackId: number, label?: string) => {
+      await saveDetection.mutateAsync({ trackId, label });
     },
   };
 

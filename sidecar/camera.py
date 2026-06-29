@@ -1,10 +1,10 @@
 """Camera worker. Owns the frame source and runs the live pipeline.
 
 The source streams continuously from app start, so there is always a live
-preview. A clip layers detection plus on-disk save on top of that stream,
-saving the most recent N seconds from a rolling JPEG buffer plus all frames
-captured between clip start and clip stop. Stopping the clip leaves the
-preview running so the user can immediately start another clip.
+preview. Clip recording and live detection can be enabled independently.
+Clips include the most recent N seconds from a rolling JPEG buffer plus all
+frames captured between clip start and clip stop. Stopping a clip leaves the
+preview and optional live detection running.
 """
 
 import threading
@@ -23,10 +23,9 @@ from sidecar.detect import Detector
 from sidecar.frame_buffer import JpegBuffer
 from sidecar.frame_source import open_source
 from sidecar.image_processing import ImageProcessor
-from sidecar.models import Clip, Run, Track
+from sidecar.models import Clip, Run
 from sidecar.settings_service import processor as get_processor
 from sidecar.track import SortTracker
-from sidecar.tracklet_writer import TrackletWriter
 
 RETRY_DELAY_S = 1.0
 BUFFER_SECONDS = 60.0
@@ -39,6 +38,16 @@ class PreviewState:
     tracks: list[dict] = field(default_factory=list)
     frame_index: int = 0
     saved_tracks: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class DetectionCapture:
+    track_id: int
+    frame: np.ndarray
+    bbox: tuple[int, int, int, int]
+    area_px: float
+    hits: int
+    history: tuple[tuple[int, int, int, int], ...]
 
 
 @dataclass
@@ -56,11 +65,7 @@ class _ClipContext:
 
     config: ClipConfig
     writer: ClipWriter
-    tracklet_writer: TrackletWriter
-    detector: Detector
-    tracker: SortTracker
     start_wall: float
-    saved_tracks: int = 0
 
 
 class CameraWorker:
@@ -74,7 +79,10 @@ class CameraWorker:
         self._state = PreviewState()
         self._clip_lock = threading.Lock()
         self._clip_ctx: _ClipContext | None = None
-        self._labels: dict[int, str] = {}
+        self._detection_lock = threading.Lock()
+        self._detection_enabled = False
+        self._detector: Detector | None = None
+        self._tracker: SortTracker | None = None
         self._source_dims: tuple[int, int, float] | None = None
         self._buffer = JpegBuffer(BUFFER_SECONDS, target_fps)
 
@@ -95,6 +103,48 @@ class CameraWorker:
         ctx = self._clip_ctx
         return ctx.config if ctx is not None else None
 
+    @property
+    def detection_enabled(self) -> bool:
+        with self._detection_lock:
+            return self._detection_enabled
+
+    def set_detection_enabled(self, enabled: bool) -> None:
+        with self._detection_lock:
+            self._detection_enabled = enabled
+            if enabled:
+                self._detector = Detector()
+                self._tracker = SortTracker()
+            else:
+                self._detector = None
+                self._tracker = None
+        if not enabled:
+            with self._state_lock:
+                self._state.tracks = []
+
+    def capture_detection(self, track_id: int) -> DetectionCapture | None:
+        with self._detection_lock:
+            if self._tracker is None:
+                return None
+            state = self._tracker.all_known_tracks().get(track_id)
+            if state is None:
+                return None
+            bbox = state.bbox
+            area_px = state.last_detection.area_px
+            hits = state.hits
+            history = tuple(state.history)
+            with self._state_lock:
+                if self._state.frame is None:
+                    return None
+                frame = _crop_detection(self._state.frame, bbox)
+        return DetectionCapture(
+            track_id=track_id,
+            frame=frame,
+            bbox=bbox,
+            area_px=area_px,
+            hits=hits,
+            history=history,
+        )
+
     def snapshot(self) -> PreviewState:
         with self._state_lock:
             if self._state.frame is None:
@@ -105,14 +155,6 @@ class CameraWorker:
                 frame_index=self._state.frame_index,
                 saved_tracks=self._state.saved_tracks,
             )
-
-    def set_label(self, db_track_id: int, label: str) -> None:
-        self._labels[db_track_id] = label
-        with session_scope() as session:
-            track = session.get(Track, db_track_id)
-            if track is not None:
-                track.label = label
-                session.add(track)
 
     def start_capture(self) -> None:
         if self.is_capturing:
@@ -147,9 +189,6 @@ class CameraWorker:
             self._clip_ctx = _ClipContext(
                 config=config,
                 writer=writer,
-                tracklet_writer=TrackletWriter(self.engine, config.run_id, fps, config.clip_dir),
-                detector=Detector(),
-                tracker=SortTracker(),
                 start_wall=time.monotonic(),
             )
 
@@ -160,10 +199,9 @@ class CameraWorker:
         if ctx is None:
             return
 
-        video_ms = int((time.monotonic() - ctx.start_wall) * 1000)
-        ctx.tracklet_writer.flush_all(video_ms)
         ctx.writer.stop()
 
+        video_ms = int((time.monotonic() - ctx.start_wall) * 1000)
         duration_ms = video_ms + int(ctx.config.seconds_before * 1000)
         ended = datetime.now(UTC)
         with session_scope() as session:
@@ -222,34 +260,41 @@ class CameraWorker:
                 self._source_dims = None
 
     def _process_frame(self, frame: np.ndarray) -> tuple[list[dict], int]:
-        """Run detection plus clip-writing if a clip is active, else pass through."""
+        """Write an active clip and independently update optional live detection."""
         with self._clip_lock:
             ctx = self._clip_ctx
-            if ctx is None:
+            if ctx is not None:
+                ctx.writer.push(frame)
+
+        with self._detection_lock:
+            if not self._detection_enabled or self._detector is None or self._tracker is None:
                 return [], 0
-
-            video_ms = int((time.monotonic() - ctx.start_wall) * 1000)
-            ctx.writer.push(frame)
-            detections = ctx.detector.process(frame)
-            active, ended = ctx.tracker.update(detections)
-            ctx.tracklet_writer.step(frame, active, ended, video_ms)
-            ctx.saved_tracks += len(ended)
-
-            preview_tracks = []
+            detections = self._detector.process(frame)
+            active, _ = self._tracker.update(detections)
+            preview_tracks: list[dict] = []
             for state in active:
-                db_id = ctx.tracklet_writer.sort_to_db.get(state.track_id)
-                if db_id is None:
-                    continue
                 x, y, w, h = state.bbox
                 preview_tracks.append(
                     {
-                        "id": db_id,
+                        "id": state.track_id,
                         "x": x,
                         "y": y,
                         "w": w,
                         "h": h,
-                        "label": self._labels.get(db_id),
+                        "label": None,
                         "n_frames": state.hits,
                     }
                 )
-            return preview_tracks, ctx.saved_tracks
+            return preview_tracks, 0
+
+
+def _crop_detection(
+    frame: np.ndarray, bbox: tuple[int, int, int, int], padding: int = 20
+) -> np.ndarray:
+    height, width = frame.shape[:2]
+    x, y, box_width, box_height = bbox
+    x1 = max(0, x - padding)
+    y1 = max(0, y - padding)
+    x2 = min(width, x + box_width + padding)
+    y2 = min(height, y + box_height + padding)
+    return frame[y1:y2, x1:x2].copy()

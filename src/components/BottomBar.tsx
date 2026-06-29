@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { Aperture, Camera, Circle, Settings2, Square } from "lucide-react";
+import { Aperture, Camera, Circle, ScanLine, Settings2, Square } from "lucide-react";
+import { useDetectionStatus, useSetDetection } from "../lib/api";
 import { useApp } from "../state";
 
 export function BottomBar() {
@@ -14,6 +15,9 @@ export function BottomBar() {
     toggleProcessing,
   } = useApp();
   const [snapping, setSnapping] = useState(false);
+  const detection = useDetectionStatus();
+  const setDetection = useSetDetection();
+  const boxesEnabled = detection.data?.enabled ?? false;
 
   const handleSnap = async () => {
     setSnapping(true);
@@ -40,6 +44,14 @@ export function BottomBar() {
           {clipping && <span className="text-record">Recording</span>}
         </div>
         <ToolButton
+          active={boxesEnabled}
+          disabled={detection.isPending || setDetection.isPending}
+          onClick={() => setDetection.mutate(!boxesEnabled)}
+          icon={<ScanLine size={13} strokeWidth={2} />}
+        >
+          Boxes
+        </ToolButton>
+        <ToolButton
           onClick={toggleProcessing}
           icon={<Aperture size={13} strokeWidth={2} />}
         >
@@ -53,19 +65,29 @@ export function BottomBar() {
 function ToolButton({
   onClick,
   icon,
+  active = false,
+  disabled = false,
   children,
 }: {
   onClick: () => void;
   icon: React.ReactNode;
+  active?: boolean;
+  disabled?: boolean;
   children: React.ReactNode;
 }) {
   return (
     <motion.button
       whileTap={{ scale: 0.95 }}
       onClick={onClick}
-      className="flex items-center gap-1.5 px-2 h-7 rounded border border-rule bg-paper-2 text-ink hover:bg-paper-3 text-[12px]"
+      disabled={disabled}
+      className={
+        "flex items-center gap-1.5 px-2 h-7 rounded border text-[12px] disabled:opacity-50 " +
+        (active
+          ? "border-accent bg-accent/10 text-accent"
+          : "border-rule bg-paper-2 text-ink hover:bg-paper-3")
+      }
     >
-      <span className="text-ink-2">{icon}</span>
+      <span className={active ? "text-accent" : "text-ink-2"}>{icon}</span>
       {children}
     </motion.button>
   );

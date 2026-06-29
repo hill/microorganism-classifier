@@ -17,6 +17,8 @@ from sidecar.models import (
     CameraInfo,
     Clip,
     ClipStart,
+    DetectionSave,
+    DetectionSet,
     FlagSet,
     Frame,
     LabelSet,
@@ -33,15 +35,17 @@ from sidecar.models import (
     Track,
     TrackRead,
 )
+from sidecar.morphometry import sharpness, summarise
 from sidecar.paths import get_sessions_dir
 from sidecar.settings_service import get_settings, update_settings
 
 PREVIEW_HZ = 15
-PREVIEW_PNG_COMPRESSION = 1
+PREVIEW_JPEG_QUALITY = 100
 
 
 def create_app() -> FastAPI:
     worker = CameraWorker(engine)
+    camera_inventory: list[tuple[int, str, int, int]] = []
     # Cache: sample_id -> currently-open run_id. Survives the app's lifetime.
     active_run_for_sample: dict[int, int] = {}
 
@@ -52,6 +56,8 @@ def create_app() -> FastAPI:
         # Materialise settings so the cache and ImageProcessor are populated
         # before the capture loop starts pulling frames.
         get_settings()
+        # Scan before capture starts so probing cannot interrupt the active device.
+        camera_inventory.extend(probe_cameras())
         worker.start_capture()
         try:
             yield
@@ -97,7 +103,21 @@ def create_app() -> FastAPI:
     def list_cameras() -> list[CameraInfo]:
         return [
             CameraInfo(index=i, name=name, width=w, height=h)
-            for i, name, w, h in probe_cameras()
+            for i, name, w, h in camera_inventory
+        ]
+
+    @app.post("/cameras/rescan", response_model=list[CameraInfo])
+    def rescan_cameras() -> list[CameraInfo]:
+        if worker.is_clipping:
+            raise HTTPException(409, "cannot rescan cameras while recording a clip")
+        worker.stop()
+        try:
+            camera_inventory[:] = probe_cameras(refresh=True)
+        finally:
+            worker.start_capture()
+        return [
+            CameraInfo(index=i, name=name, width=w, height=h)
+            for i, name, w, h in camera_inventory
         ]
 
     @app.post("/sessions", response_model=Session)
@@ -128,6 +148,15 @@ def create_app() -> FastAPI:
         db.refresh(run)
         return run
 
+    @app.get("/detection")
+    def detection_status() -> dict:
+        return {"enabled": worker.detection_enabled}
+
+    @app.patch("/detection")
+    def patch_detection(payload: DetectionSet) -> dict:
+        worker.set_detection_enabled(payload.enabled)
+        return {"enabled": worker.detection_enabled}
+
     def _ensure_run(sample_id: int, db: DbSession) -> Run:
         """Find an open run for this sample, or create a new one."""
         cached = active_run_for_sample.get(sample_id)
@@ -147,6 +176,61 @@ def create_app() -> FastAPI:
         db.refresh(run)
         active_run_for_sample[sample_id] = run.id
         return run
+
+    @app.post("/detections/{track_id}/save", response_model=Track)
+    def save_detection(
+        track_id: int,
+        payload: DetectionSave,
+        db: DbSession = Depends(get_session),
+    ) -> Track:
+        sample = db.get(Sample, payload.sample_id)
+        if sample is None:
+            raise HTTPException(404, "sample not found")
+        capture = worker.capture_detection(track_id)
+        if capture is None:
+            raise HTTPException(404, "live detection is no longer available")
+
+        run = _ensure_run(payload.sample_id, db)
+        now = datetime.now(UTC)
+        metrics = summarise(list(capture.history), [capture.area_px], 15.0)
+        track = Track(
+            run_id=run.id,
+            label=payload.label.strip() if payload.label and payload.label.strip() else None,
+            first_frame_ts=now,
+            last_frame_ts=now,
+            start_video_ms=0,
+            end_video_ms=0,
+            n_frames=max(capture.hits, 1),
+            mean_area_px=capture.area_px,
+            bbox_w_px=metrics.bbox_w_px,
+            bbox_h_px=metrics.bbox_h_px,
+            mean_speed_px_s=metrics.mean_speed_px_s,
+        )
+        db.add(track)
+        db.flush()
+
+        track_dir = (
+            get_sessions_dir()
+            / f"session_{sample.session_id:06d}"
+            / f"run_{run.id:06d}"
+            / "tracks"
+            / f"track_{track.id:06d}"
+        )
+        track_dir.mkdir(parents=True, exist_ok=True)
+        frame_path = track_dir / "frame_001.png"
+        if not cv2.imwrite(str(frame_path), capture.frame):
+            raise HTTPException(500, "could not write detection cutout")
+        db.add(
+            Frame(
+                track_id=track.id,
+                ts=now,
+                path=str(frame_path),
+                sharpness=sharpness(capture.frame),
+            )
+        )
+        db.commit()
+        db.refresh(track)
+        return track
 
     @app.post("/clips/start", response_model=Clip)
     def start_clip(payload: ClipStart, db: DbSession = Depends(get_session)) -> Clip:
@@ -300,7 +384,9 @@ def create_app() -> FastAPI:
         track = db.get(Track, track_id)
         if track is None:
             raise HTTPException(404, "track not found")
-        worker.set_label(track_id, payload.label)
+        track.label = payload.label
+        db.add(track)
+        db.commit()
         return {"ok": True}
 
     @app.post("/tracks/{track_id}/flag")
@@ -352,6 +438,7 @@ def create_app() -> FastAPI:
     @app.get("/snapshots", response_model=list[Snapshot])
     def list_snapshots(
         run_id: int | None = None,
+        session_id: int | None = None,
         flagged: bool | None = None,
         label: str | None = None,
         limit: int = 200,
@@ -360,6 +447,12 @@ def create_app() -> FastAPI:
         stmt = select(Snapshot)
         if run_id is not None:
             stmt = stmt.where(Snapshot.run_id == run_id)
+        if session_id is not None:
+            stmt = (
+                stmt.join(Run, Snapshot.run_id == Run.id)
+                .join(Sample, Run.sample_id == Sample.id)
+                .where(Sample.session_id == session_id)
+            )
         if flagged is not None:
             stmt = stmt.where(Snapshot.flagged == flagged)
         if label is not None:
@@ -416,11 +509,17 @@ def create_app() -> FastAPI:
                     "clipping": worker.is_clipping,
                 }
                 if snap.frame is not None and snap.frame_index != last_frame_index:
-                    # PNG is lossless, so the browser sees the exact processed frame pixels.
+                    # Full chroma and maximum quality keep the live view responsive while
+                    # avoiding the multi-megabyte frames produced by lossless PNG.
                     ok, buf = cv2.imencode(
-                        ".png",
+                        ".jpg",
                         snap.frame,
-                        [int(cv2.IMWRITE_PNG_COMPRESSION), PREVIEW_PNG_COMPRESSION],
+                        [
+                            int(cv2.IMWRITE_JPEG_QUALITY),
+                            PREVIEW_JPEG_QUALITY,
+                            int(cv2.IMWRITE_JPEG_SAMPLING_FACTOR),
+                            int(cv2.IMWRITE_JPEG_SAMPLING_FACTOR_444),
+                        ],
                     )
                     if ok:
                         await ws.send_bytes(bytes(buf))

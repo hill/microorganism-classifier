@@ -165,6 +165,15 @@ class FlagSet(SQLModel):
     flagged: bool
 
 
+class DetectionSet(SQLModel):
+    enabled: bool
+
+
+class DetectionSave(SQLModel):
+    sample_id: int
+    label: str | None = None
+
+
 class NotesSet(SQLModel):
     notes: str
 

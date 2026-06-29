@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Check, ChevronDown, RefreshCw, Webcam } from "lucide-react";
-import { useCameras, useSettings, useUpdateSettings } from "../lib/api";
+import { useCameras, useRescanCameras, useSettings, useUpdateSettings } from "../lib/api";
 
 export function CameraSelect() {
   const { data: settings } = useSettings();
   const cameras = useCameras();
+  const rescan = useRescanCameras();
   const update = useUpdateSettings();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
@@ -25,7 +26,7 @@ export function CameraSelect() {
   const options =
     cameras.data?.map((c) => ({
       index: c.index,
-      name: c.name,
+      name: c.name || `Camera ${c.index}`,
       detail: `${c.width}×${c.height}`,
     })) ?? [];
   const currentCamera = options.find((camera) => camera.index === current);
@@ -81,16 +82,16 @@ export function CameraSelect() {
             ))}
             <div className="border-t border-rule mt-1 pt-1">
               <button
-                onClick={() => cameras.refetch()}
-                disabled={cameras.isFetching}
+                onClick={() => rescan.mutate()}
+                disabled={rescan.isPending}
                 className="w-full flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] text-ink-2 hover:text-ink hover:bg-paper-2 text-left"
               >
                 <RefreshCw
                   size={11}
                   strokeWidth={2}
-                  className={cameras.isFetching ? "animate-spin" : ""}
+                  className={rescan.isPending ? "animate-spin" : ""}
                 />
-                {cameras.isFetching ? "Scanning" : "Rescan"}
+                {rescan.isPending ? "Scanning" : "Rescan"}
               </button>
             </div>
           </motion.div>

@@ -26,28 +26,53 @@ export function usePreviewSocket(enabled: boolean) {
   useEffect(() => {
     if (!enabled) return;
     const wsUrl = API_BASE.replace("http", "ws") + "/ws/preview";
-    const ws = new WebSocket(wsUrl);
-    ws.binaryType = "blob";
+    let ws: WebSocket | null = null;
+    let retryTimer: number | null = null;
+    let retryDelayMs = 250;
+    let stopped = false;
 
-    ws.onopen = () => setConnected(true);
-    ws.onclose = () => setConnected(false);
-    ws.onerror = () => setConnected(false);
+    const connect = () => {
+      if (stopped) return;
+      const socket = new WebSocket(wsUrl);
+      ws = socket;
+      socket.binaryType = "blob";
 
-    ws.onmessage = (ev) => {
-      if (typeof ev.data === "string") {
-        const msg = JSON.parse(ev.data);
-        setState({
-          frameIndex: msg.frame_index,
-          savedTracks: msg.saved_tracks,
-          tracks: msg.tracks,
-          frame: frameRef.current || undefined,
-        });
-      } else {
-        frameRef.current = new Blob([ev.data as Blob], { type: "image/png" });
-      }
+      socket.onopen = () => {
+        if (socket !== ws) return;
+        retryDelayMs = 250;
+        setConnected(true);
+      };
+      socket.onclose = () => {
+        if (socket !== ws || stopped) return;
+        setConnected(false);
+        retryTimer = window.setTimeout(connect, retryDelayMs);
+        retryDelayMs = Math.min(retryDelayMs * 2, 2000);
+      };
+      socket.onerror = () => {
+        if (socket === ws) socket.close();
+      };
+      socket.onmessage = (event) => {
+        if (socket !== ws) return;
+        if (typeof event.data === "string") {
+          const message = JSON.parse(event.data);
+          setState({
+            frameIndex: message.frame_index,
+            savedTracks: message.saved_tracks,
+            tracks: message.tracks,
+            frame: frameRef.current || undefined,
+          });
+        } else {
+          frameRef.current = new Blob([event.data as Blob], { type: "image/jpeg" });
+        }
+      };
     };
 
-    return () => ws.close();
+    connect();
+    return () => {
+      stopped = true;
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
+      ws?.close();
+    };
   }, [enabled]);
 
   return { state, connected };
