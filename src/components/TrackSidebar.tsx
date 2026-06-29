@@ -10,8 +10,12 @@ interface Props {
 }
 
 export function TrackSidebar({ liveTracks }: Props) {
-  const { clipping } = useApp();
-  const saved = useTracks({ sort: "id_desc" });
+  const { clipping, sessionId } = useApp();
+  const saved = useTracks(
+    { session_id: sessionId ?? undefined, sort: "id_desc" },
+    { enabled: sessionId !== null },
+  );
+  const tracks = sessionId !== null ? saved.data : undefined;
 
   return (
     <aside className="w-56 shrink-0 border-l border-rule bg-paper flex flex-col min-h-0">
@@ -23,9 +27,15 @@ export function TrackSidebar({ liveTracks }: Props) {
       </div>
 
       <div className="flex-1 overflow-y-auto p-1">
-        <div className="space-y-0.5">
-          {saved.data?.map((t) => <Row key={t.id} track={t} />)}
-        </div>
+        {tracks && tracks.length > 0 ? (
+          <div className="space-y-0.5">
+            {tracks.map((t) => <Row key={t.id} track={t} />)}
+          </div>
+        ) : (
+          <p className="px-2 py-3 text-[11px] text-ink-3">
+            {sessionId === null ? "No active session." : "No captures yet this session."}
+          </p>
+        )}
       </div>
     </aside>
   );

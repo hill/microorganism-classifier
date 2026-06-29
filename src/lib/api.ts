@@ -54,15 +54,20 @@ export interface TrackDetail extends Track {
 export const useSessions = () =>
   useQuery({ queryKey: ["sessions"], queryFn: () => jsonFetch<Session[]>("/sessions") });
 
-export const useTracks = (filters: { run_id?: number; flagged?: boolean; label?: string; sort?: string } = {}) => {
+export const useTracks = (
+  filters: { run_id?: number; session_id?: number; flagged?: boolean; label?: string; sort?: string } = {},
+  options: { enabled?: boolean } = {},
+) => {
   const params = new URLSearchParams();
   if (filters.run_id !== undefined) params.set("run_id", String(filters.run_id));
+  if (filters.session_id !== undefined) params.set("session_id", String(filters.session_id));
   if (filters.flagged !== undefined) params.set("flagged", String(filters.flagged));
   if (filters.label) params.set("label", filters.label);
   if (filters.sort) params.set("sort", filters.sort);
   return useQuery({
     queryKey: ["tracks", filters],
     queryFn: () => jsonFetch<Track[]>(`/tracks?${params.toString()}`),
+    enabled: options.enabled ?? true,
   });
 };
 

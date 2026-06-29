@@ -47,7 +47,9 @@ export function CameraSelect() {
         className="flex items-center gap-1.5 h-7 px-2 rounded border border-rule bg-paper-2 text-ink hover:bg-paper-3 text-[11px]"
       >
         <Webcam size={13} strokeWidth={2} className="text-ink-2" />
-        <span>{currentCamera?.name ?? `Camera ${current}`}</span>
+        <span className="max-w-44 truncate">
+          {currentCamera?.name ?? `Camera ${current}`}
+        </span>
         <ChevronDown size={12} className="text-ink-2" />
       </button>
       <AnimatePresence>
@@ -57,7 +59,7 @@ export function CameraSelect() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -4, scale: 0.98 }}
             transition={{ duration: 0.1 }}
-            className="absolute right-0 top-full mt-1 min-w-[180px] bg-paper border border-rule rounded-md shadow-lg z-50 py-1"
+            className="absolute right-0 top-full mt-1 min-w-[260px] bg-paper border border-rule rounded-md shadow-lg z-50 py-1"
           >
             {options.map((opt) => (
               <button
@@ -68,9 +70,11 @@ export function CameraSelect() {
                   (opt.index === current ? "text-ink" : "text-ink-2")
                 }
               >
-                <span className="flex items-center gap-1.5">
-                  {opt.name}
-                  {opt.detail && <span className="text-[10px] text-ink-3">{opt.detail}</span>}
+                <span className="flex items-center gap-1.5 min-w-0">
+                  <span className="truncate">{opt.name}</span>
+                  {opt.detail && (
+                    <span className="text-[10px] text-ink-3 shrink-0">{opt.detail}</span>
+                  )}
                 </span>
                 {opt.index === current && <Check size={12} className="text-accent" />}
               </button>
